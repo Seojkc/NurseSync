@@ -54,7 +54,7 @@ export function MonthGrid({
                   !inMonth && styles.cellOut,
                   isSelected && styles.cellSelected,
                 ]}>
-                {hasNote && <Text style={styles.noteIcon}>🌸</Text>}
+                {hasNote && <Text style={styles.noteIcon}>🎀</Text>}
                 <View style={[styles.dayCircle, isToday && styles.dayToday]}>
                   <Text
                     style={[

@@ -299,9 +299,9 @@ function DayCell({
                 justifyContent: 'flex-start',
               }}>
               {hasNote ? (
-                <TextWidget text="🌸" style={{fontSize: noteFont}} />
+                <TextWidget text="🎀" style={{fontSize: noteFont}} />
               ) : null}
-            </FlexWidget>
+            </FlexWidget> 
           </FlexWidget>
           {tile ? (
             <FlexWidget
