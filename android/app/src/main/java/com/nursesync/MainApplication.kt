@@ -1,5 +1,4 @@
-package com.nursesync
-
+package com.nursesync.seovision
 import android.app.Application
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
@@ -25,3 +24,4 @@ class MainApplication : Application(), ReactApplication {
     loadReactNative(this)
   }
 }
+ 

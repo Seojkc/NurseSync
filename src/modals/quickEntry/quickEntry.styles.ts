@@ -1,0 +1,67 @@
+import {StyleSheet} from 'react-native';
+import {C} from '../../theme';
+
+export const styles = StyleSheet.create({
+  qiLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  qiLabelActions: {flexDirection: 'row', alignItems: 'center', gap: 12},
+  qiClear: {color: C.textSoft, fontSize: 13, fontWeight: '700'},
+  qiPasteBtn: {
+    backgroundColor: C.pinkSoft,
+    borderBottomWidth: 3,
+    borderBottomColor: C.cardEdge,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  qiPasteText: {color: C.pinkDark, fontSize: 14, fontWeight: '800'},
+  qiBox: {height: 110, fontSize: 13, marginBottom: 12},
+  qiBigBtn: {
+    backgroundColor: C.pink,
+    borderBottomWidth: 5,
+    borderBottomColor: C.pinkDark,
+    borderRadius: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  qiBigBtnText: {color: '#fff', fontSize: 16, fontWeight: '800'},
+  qiFound: {color: C.pinkDark, fontSize: 15, fontWeight: '800', marginBottom: 6},
+  qiHint: {color: C.textSoft, fontSize: 12.5, lineHeight: 18, marginBottom: 8},
+  qiCodeBlock: {
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: C.pinkSoft,
+  },
+  qiCodeTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  qiCodeChip: {
+    minWidth: 44,
+    height: 32,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: C.inputBg,
+    borderWidth: 1.5,
+    borderColor: C.pinkSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qiCodeChipText: {color: C.text, fontSize: 15, fontWeight: '800'},
+  qiCodeCount: {color: C.textSoft, fontSize: 13},
+  qiRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: C.pinkSoft,
+  },
+  qiRowDate: {color: C.text, fontSize: 14, fontWeight: '700', marginTop: 8},
+  qiRowRead: {color: C.textSoft, fontSize: 11.5, marginTop: 2},
+});
