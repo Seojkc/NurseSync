@@ -28,6 +28,7 @@
 ---
 Current Version
 
+https://github.com/Seojkc/NurseSync/releases/download/release/NurseSync.apk 
 
 ---
 
