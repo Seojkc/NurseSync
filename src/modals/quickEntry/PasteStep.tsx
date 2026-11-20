@@ -23,8 +23,45 @@ export function PasteStep({q, tiles, onClose}: Props) {
       <Text style={shared.modalTitle}>Quick entry ⚡</Text>
 
       <ScrollView style={shared.scroll} keyboardShouldPersistTaps="handled">
+        {/* 1 · name */}
+        <Text style={styles.qiStepLabel}>1 · Your name on the roster</Text>
+        <TextInput
+          value={q.name}
+          onChangeText={q.changeName}
+          placeholder="e.g. Sandra"
+          placeholderTextColor={PH}
+          autoCapitalize="words"
+          autoCorrect={false}
+          maxLength={30}
+          style={[shared.input, styles.qiNameInput]}
+        />
+
+        {/* 2 · copy prompt */}
+        <Text style={styles.qiStepLabel}>2 · Copy the prompt</Text>
+        <Pressable
+          onPress={q.copyPrompt}
+          disabled={q.name.trim().length === 0}
+          style={({pressed}) => [
+            styles.qiCopyBtn,
+            q.copied && styles.qiCopyBtnDone,
+            q.name.trim().length === 0 && {opacity: 0.35},
+            pressed && {transform: [{translateY: 2}]},
+          ]}>
+          <Text style={[styles.qiCopyText, q.copied && styles.qiCopyTextDone]}>
+            {q.copied ? '✓ Copied' : '📋 Copy prompt'}
+          </Text>
+        </Pressable>
+        <Text style={styles.qiHint}>
+          Open ChatGPT, Google Gemini or Claude. Attach your roster photo, paste
+          the prompt and send. Then copy the reply.
+        </Text>
+
+        <View style={styles.qiDivider} />
+
+        {/* 3 · paste reply */}
+        <Text style={styles.qiStepLabel}>3 · Paste the reply below</Text>
         <View style={styles.qiLabelRow}>
-          <Text style={shared.modalLabelInline}>Paste the JSON here</Text>
+          <Text style={shared.modalLabelInline}>JSON from the AI</Text>
           <View style={styles.qiLabelActions}>
             {text.length > 0 && (
               <Pressable onPress={q.clearAll} hitSlop={8}>

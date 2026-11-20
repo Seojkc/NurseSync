@@ -1,5 +1,6 @@
 export const STORAGE_KEY = '@shift_calendar_v1';
 export const CODE_MAP_KEY = '@shift_code_map_v1';
+export const NAME_KEY = '@shift_staff_name_v1';
 export const NONE = '__none__'; // "Unlist" / nothing on that day
 
 export const MONTHS = [

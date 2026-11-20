@@ -2,6 +2,30 @@ import {StyleSheet} from 'react-native';
 import {C} from '../../theme';
 
 export const styles = StyleSheet.create({
+  qiStepLabel: {
+    color: C.pinkDark,
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  qiNameInput: {marginBottom: 12},
+  qiCopyBtn: {
+    backgroundColor: C.pinkSoft,
+    borderBottomWidth: 4,
+    borderBottomColor: C.cardEdge,
+    borderRadius: 14,
+    paddingVertical: 11,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  qiCopyBtnDone: {backgroundColor: '#D8F5E8', borderBottomColor: '#9ADFBF'},
+  qiCopyText: {color: C.pinkDark, fontSize: 15, fontWeight: '800'},
+  qiCopyTextDone: {color: '#1F8A5B'},
+  qiDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: C.pinkSoft,
+    marginVertical: 14,
+  },
   qiLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',

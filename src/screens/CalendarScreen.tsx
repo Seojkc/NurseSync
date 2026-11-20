@@ -135,7 +135,7 @@ export default function CalendarScreen() {
       />
 
       <View>
-        <Text style={styles.developedBy}>Developed By SeoVision</Text>
+        <Text style={styles.developedBy}>Developed By SeoNix</Text>
       </View>
 
       <AddShiftModal

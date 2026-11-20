@@ -1,11 +1,16 @@
 import {useEffect, useMemo, useState} from 'react';
 import {Alert} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {CODE_MAP_KEY, NONE} from '../constants';
+import {CODE_MAP_KEY, NAME_KEY, NONE} from '../constants';
 import {ImportRow, ParsedImport, Tile} from '../types';
-import {clipboardAvailable, readClipboard} from '../utils/clipboard';
+import {
+  clipboardAvailable,
+  readClipboard,
+  writeClipboard,
+} from '../utils/clipboard';
 import {fmtMonthKey} from '../utils/date';
 import {parseImport} from '../utils/importParser';
+import {buildPrompt} from '../utils/prompt';
 
 type Params = {
   visible: boolean;
@@ -25,6 +30,8 @@ export function useQuickEntry({
   onClose,
 }: Params) {
   const [step, setStep] = useState<'paste' | 'preview'>('paste');
+  const [name, setName] = useState(''); // staff name used in the prompt (remembered)
+  const [copied, setCopied] = useState(false);
   const [text, setText] = useState('');
   const [parsed, setParsed] = useState<ParsedImport | null>(null);
   const [error, setError] = useState('');
@@ -40,6 +47,10 @@ export function useQuickEntry({
         const raw = await AsyncStorage.getItem(CODE_MAP_KEY);
         if (raw) {
           setSaved(JSON.parse(raw));
+        }
+        const savedName = await AsyncStorage.getItem(NAME_KEY);
+        if (savedName) {
+          setName(savedName);
         }
       } catch (e) {
         // ignore
@@ -96,6 +107,27 @@ export function useQuickEntry({
     : 0;
 
   // ----- actions -----
+
+  const changeName = (n: string) => {
+    setName(n);
+    setCopied(false);
+    AsyncStorage.setItem(NAME_KEY, n).catch(() => {});
+  };
+
+  // Copies the ready-made prompt (with the name inserted) to the clipboard
+  const copyPrompt = () => {
+    if (!name.trim()) {
+      return;
+    }
+    if (!writeClipboard(buildPrompt(name))) {
+      Alert.alert(
+        'Copy button not ready',
+        'Install @react-native-clipboard/clipboard and rebuild the app.',
+      );
+      return;
+    }
+    setCopied(true);
+  };
 
   const changeText = (t: string) => {
     setText(t);
@@ -215,6 +247,10 @@ export function useQuickEntry({
   return {
     step,
     setStep,
+    name,
+    copied,
+    changeName,
+    copyPrompt,
     text,
     parsed,
     error,
