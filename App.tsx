@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {refreshWidgets} from './widget/ShiftCalendarWidget';
 
 // ---------- Types & constants ----------
 
@@ -180,7 +181,7 @@ function Calendar() {
     })();
   }, []);
 
-  // Save on change
+  // Save on change (and refresh the home-screen widget)
   useEffect(() => {
     if (!loaded) {
       return;
@@ -188,7 +189,13 @@ function Calendar() {
     AsyncStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({shifts, leaves, assignments}),
-    ).catch(() => {});
+    )
+      .then(() => {
+        if (Platform.OS === 'android') {
+          refreshWidgets();
+        }
+      })
+      .catch(() => {});
   }, [shifts, leaves, assignments, loaded]);
 
   // Every tile that can appear on a day (shifts first, then leaves)
