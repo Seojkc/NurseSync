@@ -22,6 +22,16 @@ import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {refreshWidgets} from './widget/ShiftCalendarWidget';
 
+// Clipboard (install: npm i @react-native-clipboard/clipboard, then rebuild).
+// Guarded so the app still runs if the package isn't installed yet.
+let Clipboard: {getString: () => Promise<string>} | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  Clipboard = require('@react-native-clipboard/clipboard').default;
+} catch (e) {
+  Clipboard = null;
+}
+
 // ---------- Types & constants ----------
 
 type Shift = {id: string; label: string; color: string; hours: number};
@@ -44,7 +54,12 @@ type Tile = {
 };
 type Assignments = Record<string, string>; // 'YYYY-MM-DD' -> tile id
 
+type ImportEntry = {day: number; key: string; code: string}; // code '' = unclear
+type ParsedImport = {month: string; entries: ImportEntry[]};
+
 const STORAGE_KEY = '@shift_calendar_v1';
+const CODE_MAP_KEY = '@shift_code_map_v1';
+const NONE = '__none__'; // "Unlist" / nothing on that day
 
 const MONTHS = [
   'January',
@@ -66,7 +81,7 @@ const WEEKDAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 // Cute pastel-candy tile colors (white text stays readable on all of them)
 const COLORS = [
- '#4FD1A5', // mint
+  '#4FD1A5', // mint
   '#7C9CFF', // periwinkle
   '#FFACAE', // peach orange
   '#B388FF', // lavender
@@ -76,12 +91,12 @@ const COLORS = [
   '#A8B0C0', // cloud gray
   '#F2C14E', // butter
   '#8E8CFF', // indigo
-  '#FF922B', // tangerine (replaces the missing true orange)
-  '#94D82D', // lime (distinct yellow-green)
-  '#22B8CF', // teal (deep cyan-blue, distinct from mint & sky)
-  '#C28E5C', // caramel (warm earthy brown/tan)
-  '#63E6BE', // seafoam (bright aqua-green, or #748FFC if cooler) -> let's use '#E03131' or '#F06595'? Wait—let's make the 6th completely distinct: '#51CF66' (leaf green) or '#845EF7' -> let's use '#66A80F' (olive) or '#C92A2A' -> stick to the same brightness: '#74C0FC' is too close to sky. Let's use '#A9E34B' (chartreuse) or '#9C36B5' (plum) or '#D6336C' (berry). '#9C36B5' (plum) is very distinct!
-
+  '#FF922B', // tangerine
+  '#94D82D', // lime
+  '#22B8CF', // teal
+  '#C28E5C', // caramel
+  '#63E6BE', // seafoam
+  '#9C36B5', // plum
 ];
 
 // Theme palette
@@ -158,6 +173,60 @@ const shade = (hex: string, amt: number) => {
   const b = f(n & 255);
   return `#${[r, g, b].map(v => v.toString(16).padStart(2, '0')).join('')}`;
 };
+
+// ---------- Quick-entry JSON parsing ----------
+
+// Accepts the AI's reply even if it has code fences or extra words around it.
+// Expected shape: {"month":"2026-11","days":{"1":"D2","2":"","7":"OFF"}}
+function parseImport(text: string, fallbackMonth: string): ParsedImport {
+  const s = text.trim();
+  const a = s.indexOf('{');
+  const b = s.lastIndexOf('}');
+  if (a === -1 || b <= a) {
+    throw new Error('No JSON found. Paste the full text the AI gave you.');
+  }
+  let data: any;
+  try {
+    data = JSON.parse(s.slice(a, b + 1));
+  } catch (e) {
+    throw new Error(
+      'Could not read that JSON. Ask the AI to return only the JSON again.',
+    );
+  }
+  const rawDays = data && typeof data.days === 'object' ? data.days : null;
+  if (!rawDays) {
+    throw new Error('The JSON has no "days" section.');
+  }
+
+  let month = fallbackMonth;
+  if (typeof data.month === 'string' && /^\d{4}-\d{1,2}$/.test(data.month.trim())) {
+    const [yy, mm] = data.month.trim().split('-').map(Number);
+    if (mm >= 1 && mm <= 12) {
+      month = `${yy}-${pad(mm)}`;
+    }
+  }
+  const [y, m] = month.split('-').map(Number);
+  const dim = new Date(y, m, 0).getDate();
+
+  const entries: ImportEntry[] = [];
+  Object.keys(rawDays).forEach(k => {
+    const day = Number(k);
+    if (!Number.isInteger(day) || day < 1 || day > dim) {
+      return;
+    }
+    const v = rawDays[k];
+    let code = v == null ? '' : String(v).trim().toUpperCase();
+    if (code === '?' || code === 'NULL' || code === 'UNCLEAR') {
+      code = '';
+    }
+    entries.push({day, key: `${month}-${pad(day)}`, code});
+  });
+  entries.sort((p, q) => p.day - q.day);
+  if (entries.length === 0) {
+    throw new Error('No valid days were found in that JSON.');
+  }
+  return {month, entries};
+}
 
 // ---------- Month paging ----------
 // Pages are months; page BASE_INDEX is the month the app was opened in.
@@ -237,6 +306,7 @@ function Calendar() {
   const [loaded, setLoaded] = useState(false);
   const [shiftModalOpen, setShiftModalOpen] = useState(false);
   const [vacOpen, setVacOpen] = useState(false);
+  const [quickOpen, setQuickOpen] = useState(false);
 
   // Load saved data
   useEffect(() => {
@@ -318,6 +388,7 @@ function Calendar() {
   }, [assignments, tileById]);
 
   const viewMonth = useMemo(() => monthOf(pageIndex), [pageIndex]);
+  const viewMonthKey = `${viewMonth.getFullYear()}-${pad(viewMonth.getMonth() + 1)}`;
 
   // "96 hours, 2 CL" for the month being viewed
   const summary = useMemo(() => {
@@ -490,6 +561,45 @@ function Calendar() {
     goTo(keyToDate(key));
   };
 
+  // Quick entry: write the mapped days into the calendar (overwrites those days)
+  const importEntries = (entries: {key: string; tileId: string}[]) => {
+    const next: Assignments = {...assignments};
+    let skipped = 0;
+    const countOf = (id: string, except: string) =>
+      Object.keys(next).filter(k => k !== except && next[k] === id).length;
+
+    entries.forEach(e => {
+      const t = tileById[e.tileId];
+      if (!t) {
+        skipped++;
+        return;
+      }
+      if (t.leave) {
+        const outOfRange = e.key < t.leave.start || e.key > t.leave.end;
+        if (outOfRange || countOf(t.id, e.key) >= t.leave.total) {
+          skipped++;
+          return;
+        }
+      }
+      next[e.key] = t.id;
+    });
+
+    setAssignments(next);
+    if (entries.length > 0) {
+      goTo(keyToDate(entries[0].key));
+    }
+    if (skipped > 0) {
+      setTimeout(
+        () =>
+          Alert.alert(
+            'Some days were skipped',
+            `${skipped} day${skipped === 1 ? '' : 's'} could not be added because a leave type was outside its period or already fully used.`,
+          ),
+        400,
+      );
+    }
+  };
+
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
       {/* Header */}
@@ -502,10 +612,11 @@ function Calendar() {
         </Pressable>
 
         <View style={styles.titleBlock}>
-        <Text style={styles.titleYear}>
-  {viewMonth.getFullYear() !== new Date().getFullYear() &&
-    viewMonth.getFullYear()}
-</Text>
+          <Text style={styles.titleYear}>
+            {viewMonth.getFullYear() !== new Date().getFullYear()
+              ? viewMonth.getFullYear()
+              : ''}
+          </Text>
           <Text style={styles.title} numberOfLines={1} adjustsFontSizeToFit>
             {MONTHS[viewMonth.getMonth()]}
           </Text>
@@ -520,6 +631,12 @@ function Calendar() {
 
         <View style={{flex: 1}} />
 
+        <Pressable
+          onPress={() => setQuickOpen(true)}
+          style={styles.iconBtn}
+          hitSlop={6}>
+          <Text style={styles.iconEmoji}>⚡</Text>
+        </Pressable>
         <Pressable
           onPress={() => setVacOpen(true)}
           style={styles.iconBtn}
@@ -651,6 +768,14 @@ function Calendar() {
         onAdd={addLeave}
         onDelete={confirmDeleteLeave}
         onJump={jumpToDate}
+      />
+
+      <QuickEntryModal
+        visible={quickOpen}
+        onClose={() => setQuickOpen(false)}
+        tiles={tiles}
+        viewMonthKey={viewMonthKey}
+        onImport={importEntries}
       />
     </SafeAreaView>
   );
@@ -811,38 +936,35 @@ function AddShiftModal({
             style={styles.input}
           />
 
+          <View style={styles.hourPicker}>
+            <Text style={styles.hourLabel}>Hours</Text>
 
-<View style={styles.hourPicker}>
-  <Text style={styles.hourLabel}>Hours</Text>
+            <View style={styles.numberPicker}>
+              <Pressable
+                onPress={() =>
+                  setHours(String(Math.max(0, Number(hours || 0) - 1)))
+                }
+                style={styles.pickerButton}>
+                <Text style={styles.pickerArrow}>−</Text>
+              </Pressable>
 
-  <View style={styles.numberPicker}>
-    <Pressable
-      onPress={() => setHours(String(Math.max(0, Number(hours || 0) - 1)))}
-      style={styles.pickerButton}
-    >
-      <Text style={styles.pickerArrow}>−</Text>
-    </Pressable>
+              <Text style={styles.hourValue}>{hours || '8'}</Text>
 
-    <Text style={styles.hourValue}>{hours || '8'}</Text>
+              <Pressable
+                onPress={() =>
+                  setHours(String(Math.min(24, Number(hours || 0) + 1)))
+                }
+                style={styles.pickerButton}>
+                <Text style={styles.pickerArrow}>+</Text>
+              </Pressable>
+            </View>
+          </View>
 
-    <Pressable
-      onPress={() => setHours(String(Math.min(24, Number(hours || 0) + 1)))}
-      style={styles.pickerButton}
-    >
-      <Text style={styles.pickerArrow}>+</Text>
-    </Pressable>
-  </View>
-</View>
-
-{!hoursOk && (
-  <Text style={styles.errorText}>
-    Enter hours between 0 and 24.
-  </Text>
-)}
+          {!hoursOk && (
+            <Text style={styles.errorText}>Enter hours between 0 and 24.</Text>
+          )}
 
           <ColorRow value={color} onChange={setColor} />
-
-          
 
           <View style={styles.modalActions}>
             <Pressable onPress={onClose} style={styles.modalBtn}>
@@ -882,6 +1004,462 @@ function ColorRow({
         />
       ))}
     </View>
+  );
+}
+
+// ---------- Quick entry (paste JSON -> map codes -> preview -> import) ----------
+
+function Dropdown({
+  value,
+  tiles,
+  placeholder,
+  noneLabel,
+  open,
+  onToggle,
+  onChange,
+}: {
+  value: string | undefined; // tile id, NONE, or undefined (not chosen yet)
+  tiles: Tile[];
+  placeholder: string;
+  noneLabel: string;
+  open: boolean;
+  onToggle: () => void;
+  onChange: (v: string) => void;
+}) {
+  const current = value && value !== NONE ? tiles.find(t => t.id === value) : undefined;
+  let display = placeholder;
+  if (value === NONE) {
+    display = noneLabel;
+  }
+  return (
+    <View style={{alignSelf: 'stretch'}}>
+      <Pressable
+        onPress={onToggle}
+        style={[styles.ddBtn, open && {borderColor: C.pink}]}>
+        {current ? (
+          <View style={styles.ddValueRow}>
+            <View style={[styles.ddDot, {backgroundColor: current.color}]} />
+            <Text style={styles.ddText} numberOfLines={1}>
+              {current.label}
+            </Text>
+          </View>
+        ) : (
+          <Text
+            style={[
+              styles.ddText,
+              {color: value === NONE ? C.textSoft : PH},
+            ]}
+            numberOfLines={1}>
+            {display}
+          </Text>
+        )}
+        <Text style={styles.ddCaret}>{open ? '▴' : '▾'}</Text>
+      </Pressable>
+      {open && (
+        <View style={styles.ddList}>
+          {tiles.map(t => (
+            <Pressable
+              key={t.id}
+              onPress={() => onChange(t.id)}
+              style={[styles.ddOption, value === t.id && styles.ddOptionActive]}>
+              <View style={[styles.ddDot, {backgroundColor: t.color}]} />
+              <Text style={styles.ddText} numberOfLines={1}>
+                {t.label}
+              </Text>
+            </Pressable>
+          ))}
+          <Pressable
+            onPress={() => onChange(NONE)}
+            style={[
+              styles.ddOption,
+              value === NONE && styles.ddOptionActive,
+              {borderBottomWidth: 0},
+            ]}>
+            <View style={[styles.ddDot, {backgroundColor: '#E6D3DD'}]} />
+            <Text style={[styles.ddText, {color: C.textSoft}]} numberOfLines={1}>
+              {noneLabel}
+            </Text>
+          </Pressable>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function QuickEntryModal({
+  visible,
+  onClose,
+  tiles,
+  viewMonthKey,
+  onImport,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  tiles: Tile[];
+  viewMonthKey: string;
+  onImport: (entries: {key: string; tileId: string}[]) => void;
+}) {
+  const {height} = useWindowDimensions();
+  const [step, setStep] = useState<'paste' | 'preview'>('paste');
+  const [text, setText] = useState('');
+  const [parsed, setParsed] = useState<ParsedImport | null>(null);
+  const [error, setError] = useState('');
+  const [choices, setChoices] = useState<Record<string, string>>({}); // this session
+  const [saved, setSaved] = useState<Record<string, string>>({}); // remembered
+  const [rowChoices, setRowChoices] = useState<Record<number, string>>({});
+  const [openKey, setOpenKey] = useState<string | null>(null);
+
+  // Remembered code -> tile choices
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(CODE_MAP_KEY);
+        if (raw) {
+          setSaved(JSON.parse(raw));
+        }
+      } catch (e) {
+        // ignore
+      }
+    })();
+  }, []);
+
+  // Collapse any open dropdown whenever the card is shown/hidden.
+  // (Pasted text and decoded data are kept so you can go add a tile and come back.)
+  useEffect(() => {
+    setOpenKey(null);
+  }, [visible, step]);
+
+  const tileIdSet = useMemo(() => new Set(tiles.map(t => t.id)), [tiles]);
+
+  // What each code currently maps to: this-session choice > remembered > same-name tile
+  const resolve = (code: string): string | undefined => {
+    const c = choices[code] ?? saved[code];
+    if (c === NONE) {
+      return NONE;
+    }
+    if (c && tileIdSet.has(c)) {
+      return c;
+    }
+    const auto = tiles.find(t => t.label.trim().toUpperCase() === code);
+    return auto ? auto.id : undefined;
+  };
+
+  const codes = useMemo(() => {
+    if (!parsed) {
+      return [] as {code: string; count: number}[];
+    }
+    const counts: Record<string, number> = {};
+    parsed.entries.forEach(e => {
+      if (e.code) {
+        counts[e.code] = (counts[e.code] || 0) + 1;
+      }
+    });
+    return Object.keys(counts)
+      .sort((a, b) => a.localeCompare(b, undefined, {numeric: true}))
+      .map(code => ({code, count: counts[code]}));
+  }, [parsed]);
+
+  const unclearCount = parsed ? parsed.entries.filter(e => !e.code).length : 0;
+  const allMapped = codes.length > 0 && codes.every(c => resolve(c.code) !== undefined);
+
+  const monthLabel = parsed
+    ? (() => {
+        const [yy, mm] = parsed.month.split('-').map(Number);
+        return `${MONTHS[mm - 1]} ${yy}`;
+      })()
+    : '';
+
+  const pasteFromClipboard = async () => {
+    if (!Clipboard) {
+      Alert.alert(
+        'Paste button not ready',
+        'Install @react-native-clipboard/clipboard and rebuild the app. Until then, long-press the box and choose Paste.',
+      );
+      return;
+    }
+    try {
+      const t = await Clipboard.getString();
+      if (!t || !t.trim()) {
+        Alert.alert('Clipboard is empty', 'Copy the AI reply first, then tap Paste.');
+        return;
+      }
+      setText(t);
+      setParsed(null);
+      setError('');
+    } catch (e) {
+      Alert.alert('Could not read the clipboard');
+    }
+  };
+
+  const clearAll = () => {
+    setText('');
+    setParsed(null);
+    setError('');
+    setChoices({});
+    setRowChoices({});
+    setStep('paste');
+  };
+
+  const readData = () => {
+    try {
+      const p = parseImport(text, viewMonthKey);
+      setParsed(p);
+      setError('');
+      setChoices({});
+      setOpenKey(null);
+    } catch (e: any) {
+      setParsed(null);
+      setError(e?.message ?? 'Could not read the data.');
+    }
+  };
+
+  const goNext = () => {
+    if (!parsed || !allMapped) {
+      return;
+    }
+    // remember the mapping for next time
+    const merged: Record<string, string> = {...saved};
+    codes.forEach(c => {
+      const r = resolve(c.code);
+      if (r) {
+        merged[c.code] = r;
+      }
+    });
+    setSaved(merged);
+    AsyncStorage.setItem(CODE_MAP_KEY, JSON.stringify(merged)).catch(() => {});
+
+    const rows: Record<number, string> = {};
+    parsed.entries.forEach(e => {
+      rows[e.day] = e.code ? resolve(e.code) ?? NONE : NONE;
+    });
+    setRowChoices(rows);
+    setStep('preview');
+  };
+
+  const addToCalendar = () => {
+    if (!parsed) {
+      return;
+    }
+    const out: {key: string; tileId: string}[] = [];
+    parsed.entries.forEach(e => {
+      const c = rowChoices[e.day];
+      if (c && c !== NONE && tileIdSet.has(c)) {
+        out.push({key: e.key, tileId: c});
+      }
+    });
+    if (out.length === 0) {
+      Alert.alert('Nothing to add', 'Choose a tile for at least one day.');
+      return;
+    }
+    onImport(out);
+    clearAll();
+    onClose();
+  };
+
+  const handleBack = () => {
+    if (step === 'preview') {
+      setStep('paste');
+    } else {
+      onClose();
+    }
+  };
+
+  const previewCount = parsed
+    ? parsed.entries.filter(e => {
+        const c = rowChoices[e.day];
+        return c && c !== NONE && tileIdSet.has(c);
+      }).length
+    : 0;
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={handleBack}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.modalBackdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View style={[styles.modalCard, {maxHeight: height * 0.88}]}>
+          {step === 'paste' && (
+            <>
+              <Text style={styles.modalTitle}>Quick entry ⚡</Text>
+              <ScrollView
+                style={styles.vacScroll}
+                keyboardShouldPersistTaps="handled">
+                <View style={styles.qiLabelRow}>
+                  <Text style={styles.modalLabelInline}>Paste the JSON here</Text>
+                  <View style={styles.qiLabelActions}>
+                    {text.length > 0 && (
+                      <Pressable onPress={clearAll} hitSlop={8}>
+                        <Text style={styles.qiClear}>Clear</Text>
+                      </Pressable>
+                    )}
+                    <Pressable
+                      onPress={pasteFromClipboard}
+                      style={styles.qiPasteBtn}
+                      hitSlop={6}>
+                      <Text style={styles.qiPasteText}>📋 Paste</Text>
+                    </Pressable>
+                  </View>
+                </View>
+                <TextInput
+                  value={text}
+                  onChangeText={t => {
+                    setText(t);
+                    setParsed(null);
+                    setError('');
+                  }}
+                  placeholder='{"month":"2026-11","days":{"1":"A", ...}}'
+                  placeholderTextColor={PH}
+                  multiline
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  textAlignVertical="top"
+                  style={[styles.input, styles.qiBox]}
+                />
+
+                <Pressable
+                  onPress={readData}
+                  disabled={text.trim().length === 0}
+                  style={({pressed}) => [
+                    styles.qiBigBtn,
+                    text.trim().length === 0 && {opacity: 0.35},
+                    pressed && {transform: [{translateY: 2}]},
+                  ]}>
+                  <Text style={styles.qiBigBtnText}>Upload & read data</Text>
+                </Pressable>
+
+                {error !== '' && <Text style={styles.errorText}>{error}</Text>}
+
+                {parsed && (
+                  <View style={{marginTop: 14}}>
+                    <Text style={styles.qiFound}>
+                      {monthLabel} · {codes.length} code
+                      {codes.length === 1 ? '' : 's'} found
+                    </Text>
+                    <Text style={styles.qiHint}>
+                      Match each code to one of your tiles. Not in the list? Close
+                      this card, tap + in the bottom bar to add the tile, then come
+                      back (your data stays). Use "Unlist" for a code that makes no
+                      sense.
+                    </Text>
+                    {unclearCount > 0 && (
+                      <Text style={styles.qiHint}>
+                        {unclearCount} unclear day{unclearCount === 1 ? '' : 's'}{' '}
+                        will be left blank unless you pick one in the preview.
+                      </Text>
+                    )}
+
+                    {codes.map(c => (
+                      <View key={c.code} style={styles.qiCodeBlock}>
+                        <View style={styles.qiCodeTop}>
+                          <View style={styles.qiCodeChip}>
+                            <Text style={styles.qiCodeChipText}>{c.code}</Text>
+                          </View>
+                          <Text style={styles.qiCodeCount}>
+                            {c.count} day{c.count === 1 ? '' : 's'}
+                          </Text>
+                        </View>
+                        <Dropdown
+                          value={resolve(c.code)}
+                          tiles={tiles}
+                          placeholder="Select a tile…"
+                          noneLabel="Unlist"
+                          open={openKey === `code-${c.code}`}
+                          onToggle={() =>
+                            setOpenKey(
+                              openKey === `code-${c.code}` ? null : `code-${c.code}`,
+                            )
+                          }
+                          onChange={v => {
+                            setChoices(prev => ({...prev, [c.code]: v}));
+                            setOpenKey(null);
+                          }}
+                        />
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </ScrollView>
+
+              <View style={styles.modalActions}>
+                <Pressable onPress={onClose} style={styles.modalBtn}>
+                  <Text style={styles.modalBtnText}>Close</Text>
+                </Pressable>
+                {parsed && (
+                  <Pressable
+                    disabled={!allMapped}
+                    onPress={goNext}
+                    style={[styles.modalBtn, !allMapped && {opacity: 0.35}]}>
+                    <Text style={[styles.modalBtnText, {color: C.pinkDark}]}>
+                      Next
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+            </>
+          )}
+
+          {step === 'preview' && parsed && (
+            <>
+              <Text style={styles.modalTitle}>Preview · {monthLabel}</Text>
+              <Text style={styles.qiHint}>
+                Check each day. Change any the AI got wrong. Days left on "Select
+                one" are skipped.
+              </Text>
+              <ScrollView
+                style={styles.vacScroll}
+                keyboardShouldPersistTaps="handled">
+                {parsed.entries.map(e => {
+                  const val = rowChoices[e.day] ?? NONE;
+                  const k = `row-${e.day}`;
+                  return (
+                    <View key={e.day} style={styles.qiRow}>
+                      <View style={{flex: 1, paddingRight: 8}}>
+                        <Text style={styles.qiRowDate}>{fmtLong(e.key)}</Text>
+                        <Text style={styles.qiRowRead}>
+                          read: {e.code ? e.code : 'unclear'}
+                        </Text>
+                      </View>
+                      <View style={{width: 150}}>
+                        <Dropdown
+                          value={val}
+                          tiles={tiles}
+                          placeholder="Select one"
+                          noneLabel="Select one"
+                          open={openKey === k}
+                          onToggle={() => setOpenKey(openKey === k ? null : k)}
+                          onChange={v => {
+                            setRowChoices(prev => ({...prev, [e.day]: v}));
+                            setOpenKey(null);
+                          }}
+                        />
+                      </View>
+                    </View>
+                  );
+                })}
+              </ScrollView>
+
+              <View style={styles.modalActions}>
+                <Pressable onPress={() => setStep('paste')} style={styles.modalBtn}>
+                  <Text style={styles.modalBtnText}>Back</Text>
+                </Pressable>
+                <Pressable
+                  disabled={previewCount === 0}
+                  onPress={addToCalendar}
+                  style={[styles.modalBtn, previewCount === 0 && {opacity: 0.35}]}>
+                  <Text style={[styles.modalBtnText, {color: C.pinkDark}]}>
+                    Add {previewCount} to calendar
+                  </Text>
+                </Pressable>
+              </View>
+            </>
+          )}
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
   );
 }
 
@@ -1183,9 +1761,7 @@ function AddLeaveForm({
   return (
     <>
       <Text style={styles.modalTitle}>Add vacation 🌸</Text>
-      <ScrollView
-        style={styles.vacScroll}
-        keyboardShouldPersistTaps="handled">
+      <ScrollView style={styles.vacScroll} keyboardShouldPersistTaps="handled">
         <Text style={styles.modalLabel}>Title</Text>
         <TextInput
           value={title}
@@ -1315,8 +1891,7 @@ function DatePicker({
             key={name}
             onPress={() => setM(i)}
             style={[styles.monthChip, m === i && styles.monthChipActive]}>
-            <Text
-              style={[styles.monthChipText, m === i && {color: '#fff'}]}>
+            <Text style={[styles.monthChipText, m === i && {color: '#fff'}]}>
               {name}
             </Text>
           </Pressable>
@@ -1404,7 +1979,6 @@ const styles = StyleSheet.create({
   arrowBtn: {
     width: 34,
     height: 34,
-    
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1418,7 +1992,6 @@ const styles = StyleSheet.create({
   iconBtn: {
     width: 40,
     height: 40,
-    
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1431,7 +2004,6 @@ const styles = StyleSheet.create({
     color: C.pinkDark,
     fontSize: 13,
     fontWeight: '600',
-
     paddingHorizontal: 12,
     paddingVertical: 4,
     overflow: 'hidden',
@@ -1483,7 +2055,7 @@ const styles = StyleSheet.create({
   dayCircle: {
     minWidth: 26,
     height: 26,
-    borderRadius:33,
+    borderRadius: 33,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1526,16 +2098,13 @@ const styles = StyleSheet.create({
     borderRadius: 35,
     alignItems: 'center',
     justifyContent: 'center',
-    
   },
   tile3dPressed: {
     transform: [{translateY: 4}],
     borderBottomWidth: 2,
     elevation: 0,
   },
-  tileGloss: {
-    
-  },
+  tileGloss: {},
   barTileText: {
     color: '#fff',
     fontSize: 16,
@@ -1552,8 +2121,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 'auto',
-    
- 
   },
   plusBtnPressed: {
     transform: [{translateY: 3}],
@@ -1612,6 +2179,7 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   modalLabel: {color: C.textSoft, fontSize: 13, marginBottom: 8, fontWeight: '600'},
+  modalLabelInline: {color: C.textSoft, fontSize: 13, fontWeight: '600'},
   errorText: {color: C.danger, fontSize: 13, marginBottom: 10},
   colorRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 16},
   colorDot: {
@@ -1632,6 +2200,105 @@ const styles = StyleSheet.create({
   },
   modalBtn: {paddingHorizontal: 16, paddingVertical: 10},
   modalBtnText: {color: C.textSoft, fontSize: 16, fontWeight: '700'},
+
+  // Quick entry
+  qiLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  qiLabelActions: {flexDirection: 'row', alignItems: 'center', gap: 12},
+  qiClear: {color: C.textSoft, fontSize: 13, fontWeight: '700'},
+  qiPasteBtn: {
+    backgroundColor: C.pinkSoft,
+    borderBottomWidth: 3,
+    borderBottomColor: C.cardEdge,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  qiPasteText: {color: C.pinkDark, fontSize: 14, fontWeight: '800'},
+  qiBox: {height: 110, fontSize: 13, marginBottom: 12},
+  qiBigBtn: {
+    backgroundColor: C.pink,
+    borderBottomWidth: 5,
+    borderBottomColor: C.pinkDark,
+    borderRadius: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  qiBigBtnText: {color: '#fff', fontSize: 16, fontWeight: '800'},
+  qiFound: {color: C.pinkDark, fontSize: 15, fontWeight: '800', marginBottom: 6},
+  qiHint: {color: C.textSoft, fontSize: 12.5, lineHeight: 18, marginBottom: 8},
+  qiCodeBlock: {
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: C.pinkSoft,
+  },
+  qiCodeTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  qiCodeChip: {
+    minWidth: 44,
+    height: 32,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: C.inputBg,
+    borderWidth: 1.5,
+    borderColor: C.pinkSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qiCodeChipText: {color: C.text, fontSize: 15, fontWeight: '800'},
+  qiCodeCount: {color: C.textSoft, fontSize: 13},
+  qiRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: C.pinkSoft,
+  },
+  qiRowDate: {color: C.text, fontSize: 14, fontWeight: '700', marginTop: 8},
+  qiRowRead: {color: C.textSoft, fontSize: 11.5, marginTop: 2},
+
+  // Dropdown
+  ddBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: C.inputBg,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: C.pinkSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  ddValueRow: {flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1},
+  ddDot: {width: 14, height: 14, borderRadius: 7},
+  ddText: {color: C.text, fontSize: 14, fontWeight: '700', flexShrink: 1},
+  ddCaret: {color: C.pinkDark, fontSize: 12, marginLeft: 6},
+  ddList: {
+    marginTop: 4,
+    backgroundColor: C.card,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: C.pinkSoft,
+    overflow: 'hidden',
+  },
+  ddOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: C.pinkSoft,
+  },
+  ddOptionActive: {backgroundColor: C.inputBg},
 
   // Vacation
   vacHeader: {
@@ -1750,8 +2417,7 @@ const styles = StyleSheet.create({
   pickDayActive: {backgroundColor: C.pink},
   pickDayText: {color: C.text, fontSize: 15},
 
-
-
+  // Hour picker (add shift)
   hourPicker: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1761,19 +2427,16 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     marginBottom: 10,
   },
-  
   hourLabel: {
     fontSize: 16,
     fontWeight: '600',
     color: '#64748B',
   },
-  
   numberPicker: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 18,
   },
-  
   pickerButton: {
     width: 36,
     height: 36,
@@ -1782,13 +2445,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  
   pickerArrow: {
     fontSize: 22,
     fontWeight: '600',
     color: '#334155',
   },
-  
   hourValue: {
     fontSize: 25,
     fontWeight: '700',
@@ -1796,7 +2457,4 @@ const styles = StyleSheet.create({
     minWidth: 30,
     textAlign: 'center',
   },
-
-
-
 });
