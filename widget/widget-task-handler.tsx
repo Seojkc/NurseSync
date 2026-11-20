@@ -8,6 +8,9 @@ import {
 
 export async function widgetTaskHandler(props: WidgetTaskHandlerProps) {
   const info = props.widgetInfo;
+  console.log('ANDROID WIDGET NAME:', info.widgetName);
+console.log('ANDROID WIDGET ID:', info.widgetId);
+console.log('WIDGET ACTION:', props.widgetAction);
 
   switch (props.widgetAction) {
     case 'WIDGET_ADDED':

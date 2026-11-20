@@ -7,8 +7,8 @@ import {
 } from 'react-native-android-widget';
 
 const STORAGE_KEY = '@shift_calendar_v1';
-export const WIDGET_NAME = 'ShiftCalendar';
-const offsetKey = (id: number) => `@shift_widget_offset_${id}`;
+const OFFSETS_KEY = '@shift_widget_offsets';
+export const WIDGET_NAME = 'ShiftCalendarProvider';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -18,6 +18,12 @@ const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
 type WTile = {id: string; label: string; color: string; hours: number; leave: boolean};
 type WInfo = {widgetId: number; width: number; height: number};
+export type WData = {
+  shifts: any[];
+  leaves: any[];
+  assignments: Record<string, string>;
+};
+type Offsets = Record<string, number>;
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const toKey = (d: Date) =>
@@ -26,45 +32,58 @@ const clamp = (n: number, lo: number, hi: number) =>
   Math.min(hi, Math.max(lo, n));
 const fmtHours = (n: number) => String(Math.round(n * 100) / 100);
 
-export async function getOffset(widgetId: number): Promise<number> {
+// ---------- Per-widget month offset (all stored in one key) ----------
+
+async function readOffsets(): Promise<Offsets> {
   try {
-    const v = await AsyncStorage.getItem(offsetKey(widgetId));
-    return v ? Number(v) || 0 : 0;
+    const raw = await AsyncStorage.getItem(OFFSETS_KEY);
+    return raw ? JSON.parse(raw) : {};
   } catch {
-    return 0;
+    return {};
   }
+}
+
+export async function getOffset(widgetId: number): Promise<number> {
+  const m = await readOffsets();
+  return Number(m[String(widgetId)]) || 0;
 }
 
 export async function setOffset(widgetId: number, value: number) {
   try {
-    await AsyncStorage.setItem(offsetKey(widgetId), String(value));
+    const m = await readOffsets();
+    m[String(widgetId)] = value;
+    await AsyncStorage.setItem(OFFSETS_KEY, JSON.stringify(m));
   } catch {}
 }
 
 export async function clearOffset(widgetId: number) {
   try {
-    await AsyncStorage.removeItem(offsetKey(widgetId));
+    const m = await readOffsets();
+    delete m[String(widgetId)];
+    await AsyncStorage.setItem(OFFSETS_KEY, JSON.stringify(m));
   } catch {}
 }
 
-// Reads saved app data and builds the widget for the given size
-export async function buildWidget(info: WInfo) {
-  let shifts: any[] = [];
-  let leaves: any[] = [];
-  let assignments: Record<string, string> = {};
+// ---------- Data ----------
+
+async function loadData(): Promise<WData> {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     if (raw) {
       const data = JSON.parse(raw);
-      shifts = data.shifts ?? [];
-      leaves = data.leaves ?? [];
-      assignments = data.assignments ?? {};
+      return {
+        shifts: data.shifts ?? [],
+        leaves: data.leaves ?? [],
+        assignments: data.assignments ?? {},
+      };
     }
   } catch {}
-  const offset = await getOffset(info.widgetId);
+  return {shifts: [], leaves: [], assignments: {}};
+}
 
+function makeTiles(data: WData): Record<string, WTile> {
   const tileById: Record<string, WTile> = {};
-  shifts.forEach(s => {
+  data.shifts.forEach(s => {
     tileById[s.id] = {
       id: s.id,
       label: String(s.label),
@@ -73,7 +92,7 @@ export async function buildWidget(info: WInfo) {
       leave: false,
     };
   });
-  leaves.forEach(l => {
+  data.leaves.forEach(l => {
     tileById[l.id] = {
       id: l.id,
       label: String(l.code),
@@ -82,26 +101,46 @@ export async function buildWidget(info: WInfo) {
       leave: true,
     };
   });
+  return tileById;
+}
 
+// Fully synchronous: everything it needs is passed in
+function renderSync(info: WInfo, data: WData, offsets: Offsets) {
   return (
     <ShiftCalendarWidget
       width={info.width}
       height={info.height}
-      offset={offset}
-      assignments={assignments}
-      tileById={tileById}
+      offset={Number(offsets[String(info.widgetId)]) || 0}
+      assignments={data.assignments}
+      tileById={makeTiles(data)}
     />
   );
 }
 
-// Call from the app whenever data changes
-export function refreshWidgets() {
-  return requestWidgetUpdate({
-    widgetName: WIDGET_NAME,
-    renderWidget: info => buildWidget(info),
-    widgetNotFound: () => {},
-  }).catch(() => {});
+// Used by the widget task handler (add / resize / click / periodic update)
+export async function buildWidget(info: WInfo) {
+  const data = await loadData();
+  const offsets = await readOffsets();
+  return renderSync(info, data, offsets);
 }
+
+// Call from the app whenever data changes. Pass the live data so the
+// widget never reads stale storage.
+export async function refreshWidgets(data?: WData) {
+  try {
+    const d = data ?? (await loadData());
+    const offsets = await readOffsets();
+    await requestWidgetUpdate({
+      widgetName: WIDGET_NAME,
+      renderWidget: info => renderSync(info, d, offsets),
+      widgetNotFound: () => {},
+    });
+  } catch (e) {
+    console.warn('Widget refresh failed', e);
+  }
+}
+
+// ---------- Widget UI ----------
 
 function ShiftCalendarWidget({
   width,
@@ -141,7 +180,7 @@ function ShiftCalendarWidget({
     }
   });
   const summary = [
-    `${fmtHours(hours)} h`,
+    `${fmtHours(hours)} ${hours === 1 ? 'hour' : 'hours'}`,
     ...Object.keys(leaveCounts).map(
       id => `${leaveCounts[id].n} ${leaveCounts[id].label}`,
     ),
@@ -149,9 +188,13 @@ function ShiftCalendarWidget({
 
   // sizes scale with the widget
   const outerPad = 8;
-  const headerH = clamp(Math.round(height * 0.11), 30, 46);
+  const headerH = clamp(Math.round(height * 0.1), 30, 44);
+  const summaryH = 18;
   const weekH = 18;
-  const gridH = Math.max(60, height - outerPad * 2 - headerH - weekH);
+  const gridH = Math.max(
+    60,
+    height - outerPad * 2 - headerH - summaryH - weekH,
+  );
   const rowH = Math.floor(gridH / 6);
   const cellW = Math.floor((width - outerPad * 2) / 7);
   const dayFont = clamp(Math.round(rowH * 0.27), 9, 15);
@@ -185,7 +228,7 @@ function ShiftCalendarWidget({
         borderRadius: 24,
         padding: outerPad,
       }}>
-      {/* Header */}
+      {/* Header: arrows + month title */}
       <FlexWidget
         style={{
           width: 'match_parent',
@@ -213,14 +256,22 @@ function ShiftCalendarWidget({
           style={{width: 34, height: headerH, alignItems: 'center', justifyContent: 'center'}}>
           <TextWidget text="›" style={{fontSize: titleFont + 8, color: '#FFFFFF'}} />
         </FlexWidget>
-        <FlexWidget style={{flex: 1, height: headerH, alignItems: 'flex-end', justifyContent: 'center'}}>
-          <TextWidget
-            text={summary}
-            maxLines={1}
-            truncate="END"
-            style={{fontSize: 11, color: '#9A9A9F'}}
-          />
-        </FlexWidget>
+      </FlexWidget>
+
+      {/* Summary row: its own line, left aligned like in the app */}
+      <FlexWidget
+        style={{
+          width: 'match_parent',
+          height: summaryH,
+          justifyContent: 'center',
+          paddingHorizontal: 8,
+        }}>
+        <TextWidget
+          text={summary}
+          maxLines={1}
+          truncate="END"
+          style={{fontSize: 12, color: '#9A9A9F'}}
+        />
       </FlexWidget>
 
       {/* Weekday labels */}

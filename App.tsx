@@ -10,11 +10,13 @@ import {
   Pressable,
   ScrollView,
   StatusBar,
+  StyleProp,
   StyleSheet,
   Text,
   TextInput,
   useWindowDimensions,
   View,
+  ViewStyle,
 } from 'react-native';
 import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -62,18 +64,48 @@ const MONTHS_SHORT = MONTHS.map(m => m.slice(0, 3));
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const WEEKDAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+// Cute pastel-candy tile colors (white text stays readable on all of them)
 const COLORS = [
-  '#2E9D5B', // green
-  '#2F7DE1', // blue
-  '#E08A1E', // orange
-  '#8E54D9', // purple
-  '#D64545', // red
-  '#17A2B8', // teal
-  '#D6498F', // pink
-  '#6B7280', // gray
-  '#B58900', // mustard
-  '#3F51B5', // indigo
+ '#4FD1A5', // mint
+  '#7C9CFF', // periwinkle
+  '#FFACAE', // peach orange
+  '#B388FF', // lavender
+  '#FF7B8B', // coral
+  '#4FC3E8', // sky
+  '#FF7BB8', // bubblegum
+  '#A8B0C0', // cloud gray
+  '#F2C14E', // butter
+  '#8E8CFF', // indigo
+  '#FF922B', // tangerine (replaces the missing true orange)
+  '#94D82D', // lime (distinct yellow-green)
+  '#22B8CF', // teal (deep cyan-blue, distinct from mint & sky)
+  '#C28E5C', // caramel (warm earthy brown/tan)
+  '#63E6BE', // seafoam (bright aqua-green, or #748FFC if cooler) -> let's use '#E03131' or '#F06595'? Wait—let's make the 6th completely distinct: '#51CF66' (leaf green) or '#845EF7' -> let's use '#66A80F' (olive) or '#C92A2A' -> stick to the same brightness: '#74C0FC' is too close to sky. Let's use '#A9E34B' (chartreuse) or '#9C36B5' (plum) or '#D6336C' (berry). '#9C36B5' (plum) is very distinct!
+
 ];
+
+// Theme palette
+const C = {
+  bg: '#FFE9F2',
+  card: '#FFFFFF',
+  cardOut: '#FFF5F9',
+  cardBorder: '#FFDDEB',
+  cardEdge: '#FFC4DB',
+  pink: '#FF6FA5',
+  pinkDark: '#D93F7F',
+  pinkSoft: '#FFD3E4',
+  text: '#5B2A44',
+  textSoft: '#B07C97',
+  sunday: '#F0436E',
+  danger: '#E0245E',
+  inputBg: '#FFF3F8',
+};
+const PH = '#C9A0B5'; // placeholder color
+const CUTE_FONT = Platform.select({
+  android: 'casual',
+  ios: 'Marker Felt',
+  default: undefined,
+});
 
 const PRESETS: {label: string; color: string; hours: string}[] = [
   {label: 'AM', color: COLORS[2], hours: '8'},
@@ -112,6 +144,21 @@ const newId = () =>
 const clamp = (n: number, lo: number, hi: number) =>
   Math.min(hi, Math.max(lo, n));
 
+// Darken (amt < 0) or lighten (amt > 0) a #RRGGBB color - used for 3D edges
+const shade = (hex: string, amt: number) => {
+  const h = hex.replace('#', '');
+  if (h.length !== 6) {
+    return hex;
+  }
+  const n = parseInt(h, 16);
+  const f = (v: number) =>
+    Math.round(clamp(amt < 0 ? v * (1 + amt) : v + (255 - v) * amt, 0, 255));
+  const r = f((n >> 16) & 255);
+  const g = f((n >> 8) & 255);
+  const b = f(n & 255);
+  return `#${[r, g, b].map(v => v.toString(16).padStart(2, '0')).join('')}`;
+};
+
 // ---------- Month paging ----------
 // Pages are months; page BASE_INDEX is the month the app was opened in.
 
@@ -131,12 +178,46 @@ const indexOf = (d: Date) =>
     PAGE_COUNT - 1,
   );
 
+// ---------- 3D tile button ----------
+
+function Tile3D({
+  color,
+  label,
+  onPress,
+  onLongPress,
+  style,
+}: {
+  color: string;
+  label: string;
+  onPress?: () => void;
+  onLongPress?: () => void;
+  style?: StyleProp<ViewStyle>;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={500}
+      style={({pressed}) => [
+        styles.tile3d,
+        {backgroundColor: color, borderBottomColor: shade(color, -0.28)},
+        pressed && styles.tile3dPressed,
+        style,
+      ]}>
+      <View pointerEvents="none" style={styles.tileGloss} />
+      <Text style={styles.barTileText} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
 // ---------- App ----------
 
 export default function App() {
   return (
     <SafeAreaProvider>
-      <StatusBar barStyle="light-content" backgroundColor="#000" />
+      <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
       <Calendar />
     </SafeAreaProvider>
   );
@@ -190,12 +271,12 @@ function Calendar() {
       STORAGE_KEY,
       JSON.stringify({shifts, leaves, assignments}),
     )
-      .then(() => {
+      .catch(() => {})
+      .finally(() => {
         if (Platform.OS === 'android') {
-          refreshWidgets();
+          refreshWidgets({shifts, leaves, assignments});
         }
-      })
-      .catch(() => {});
+      });
   }, [shifts, leaves, assignments, loaded]);
 
   // Every tile that can appear on a day (shifts first, then leaves)
@@ -413,16 +494,32 @@ function Calendar() {
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
-        <Pressable onPress={() => changeMonth(-1)} hitSlop={12}>
-          <Text style={styles.arrow}>‹</Text>
+        <Pressable
+          onPress={() => changeMonth(-1)}
+          hitSlop={10}
+          style={styles.arrowBtn}>
+          <Text style={styles.arrowBtnText}>‹</Text>
         </Pressable>
-        <Text style={styles.title}>
-          {viewMonth.getFullYear()} {MONTHS[viewMonth.getMonth()]}
-        </Text>
-        <Pressable onPress={() => changeMonth(1)} hitSlop={12}>
-          <Text style={styles.arrow}>›</Text>
+
+        <View style={styles.titleBlock}>
+        <Text style={styles.titleYear}>
+  {viewMonth.getFullYear() !== new Date().getFullYear() &&
+    viewMonth.getFullYear()}
+</Text>
+          <Text style={styles.title} numberOfLines={1} adjustsFontSizeToFit>
+            {MONTHS[viewMonth.getMonth()]}
+          </Text>
+        </View>
+
+        <Pressable
+          onPress={() => changeMonth(1)}
+          hitSlop={10}
+          style={styles.arrowBtn}>
+          <Text style={styles.arrowBtnText}>›</Text>
         </Pressable>
+
         <View style={{flex: 1}} />
+
         <Pressable
           onPress={() => setVacOpen(true)}
           style={styles.iconBtn}
@@ -508,33 +605,33 @@ function Calendar() {
                 ? leaveProblem(t.leave, selectedKey) !== null
                 : false;
               return (
-                <Pressable
+                <Tile3D
                   key={t.id}
+                  color={t.color}
+                  label={t.label}
                   onPress={() => applyTile(t)}
                   onLongPress={() =>
                     t.leave ? confirmDeleteLeave(t.leave) : confirmDeleteShift(t)
                   }
-                  delayLongPress={500}
-                  style={({pressed}) => [
-                    styles.barTile,
-                    {backgroundColor: t.color},
-                    blocked && {opacity: 0.35},
-                    pressed && {opacity: 0.7},
-                  ]}>
-                  <Text style={styles.barTileText} numberOfLines={1}>
-                    {t.label}
-                  </Text>
-                </Pressable>
+                  style={blocked ? {opacity: 0.35} : undefined}
+                />
               );
             })}
           </ScrollView>
           <Pressable
             onPress={() => setShiftModalOpen(true)}
-            style={styles.plusBtn}
+            style={({pressed}) => [
+              styles.plusBtn,
+              pressed && styles.plusBtnPressed,
+            ]}
             hitSlop={8}>
             <Text style={styles.plusText}>+</Text>
           </Pressable>
         </View>
+      </View>
+
+      <View>
+        <Text style={styles.developedBy}>Developed By SeoVision</Text>
       </View>
 
       <AddShiftModal
@@ -620,7 +717,10 @@ function MonthGrid({
                   <View
                     style={[
                       styles.cellTile,
-                      {backgroundColor: tile.color},
+                      {
+                        backgroundColor: tile.color,
+                        borderBottomColor: shade(tile.color, -0.25),
+                      },
                       !inMonth && {opacity: 0.45},
                     ]}>
                     <Text style={styles.cellTileText} numberOfLines={1}>
@@ -683,7 +783,7 @@ function AddShiftModal({
         style={styles.modalBackdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
         <View style={styles.modalCard}>
-          <Text style={styles.modalTitle}>Add shift</Text>
+          <Text style={styles.modalTitle}>Add shift ✨</Text>
 
           <View style={styles.presetRow}>
             {PRESETS.map(p => (
@@ -695,7 +795,7 @@ function AddShiftModal({
                   setHours(p.hours);
                 }}
                 style={[styles.presetChip, {borderColor: p.color}]}>
-                <Text style={[styles.presetText, {color: p.color}]}>
+                <Text style={[styles.presetText, {color: shade(p.color, -0.2)}]}>
                   {p.label}
                 </Text>
               </Pressable>
@@ -706,37 +806,43 @@ function AddShiftModal({
             value={label}
             onChangeText={setLabel}
             placeholder="Shift name (e.g. AM)"
-            placeholderTextColor="#777"
+            placeholderTextColor={PH}
             maxLength={8}
             style={styles.input}
           />
 
-          <Text style={styles.modalLabel}>Hours</Text>
-          <TextInput
-            value={hours}
-            onChangeText={t => setHours(t.replace(/[^0-9.,]/g, ''))}
-            placeholder="e.g. 8 (0 for off)"
-            placeholderTextColor="#777"
-            keyboardType="decimal-pad"
-            maxLength={5}
-            style={styles.input}
-          />
-          {!hoursOk && hours.trim() !== '' && (
-            <Text style={styles.errorText}>Enter hours between 0 and 24.</Text>
-          )}
 
-          <Text style={styles.modalLabel}>Color</Text>
+<View style={styles.hourPicker}>
+  <Text style={styles.hourLabel}>Hours</Text>
+
+  <View style={styles.numberPicker}>
+    <Pressable
+      onPress={() => setHours(String(Math.max(0, Number(hours || 0) - 1)))}
+      style={styles.pickerButton}
+    >
+      <Text style={styles.pickerArrow}>−</Text>
+    </Pressable>
+
+    <Text style={styles.hourValue}>{hours || '8'}</Text>
+
+    <Pressable
+      onPress={() => setHours(String(Math.min(24, Number(hours || 0) + 1)))}
+      style={styles.pickerButton}
+    >
+      <Text style={styles.pickerArrow}>+</Text>
+    </Pressable>
+  </View>
+</View>
+
+{!hoursOk && (
+  <Text style={styles.errorText}>
+    Enter hours between 0 and 24.
+  </Text>
+)}
+
           <ColorRow value={color} onChange={setColor} />
 
-          <View style={styles.previewRow}>
-            <Text style={[styles.modalLabel, {marginBottom: 0}]}>Preview</Text>
-            <View style={[styles.barTile, {backgroundColor: color}]}>
-              <Text style={styles.barTileText}>{label.trim() || '—'}</Text>
-            </View>
-            <Text style={styles.previewHours}>
-              {hoursOk ? `${fmtHours(hoursNum)} h` : ''}
-            </Text>
-          </View>
+          
 
           <View style={styles.modalActions}>
             <Pressable onPress={onClose} style={styles.modalBtn}>
@@ -746,7 +852,7 @@ function AddShiftModal({
               disabled={!canAdd}
               onPress={() => onAdd(label.trim(), color, hoursNum)}
               style={[styles.modalBtn, !canAdd && {opacity: 0.35}]}>
-              <Text style={[styles.modalBtnText, {color: '#4DA3FF'}]}>Add</Text>
+              <Text style={[styles.modalBtnText, {color: C.pinkDark}]}>Add</Text>
             </Pressable>
           </View>
         </View>
@@ -838,7 +944,7 @@ function VacationModal({
           {current === 'list' && (
             <>
               <View style={styles.vacHeader}>
-                <Text style={styles.modalTitle}>Vacations</Text>
+                <Text style={styles.modalTitle}>Vacations 🌴</Text>
                 <Pressable
                   onPress={() => setScreen('add')}
                   style={styles.vacPlus}
@@ -860,7 +966,14 @@ function VacationModal({
                       setScreen('detail');
                     }}
                     style={styles.vacRow}>
-                    <View style={[styles.codeChip, {backgroundColor: l.color}]}>
+                    <View
+                      style={[
+                        styles.codeChip,
+                        {
+                          backgroundColor: l.color,
+                          borderBottomColor: shade(l.color, -0.28),
+                        },
+                      ]}>
                       <Text style={styles.codeChipText} numberOfLines={1}>
                         {l.code}
                       </Text>
@@ -943,7 +1056,14 @@ function LeaveDetail({
         </Pressable>
       </View>
       <View style={styles.detailTop}>
-        <View style={[styles.codeChip, {backgroundColor: leave.color}]}>
+        <View
+          style={[
+            styles.codeChip,
+            {
+              backgroundColor: leave.color,
+              borderBottomColor: shade(leave.color, -0.28),
+            },
+          ]}>
           <Text style={styles.codeChipText} numberOfLines={1}>
             {leave.code}
           </Text>
@@ -975,7 +1095,7 @@ function LeaveDetail({
 
       <View style={styles.modalActions}>
         <Pressable onPress={onDelete} style={styles.modalBtn}>
-          <Text style={[styles.modalBtnText, {color: '#E5483B'}]}>Delete</Text>
+          <Text style={[styles.modalBtnText, {color: C.danger}]}>Delete</Text>
         </Pressable>
       </View>
     </>
@@ -1062,7 +1182,7 @@ function AddLeaveForm({
 
   return (
     <>
-      <Text style={styles.modalTitle}>Add vacation</Text>
+      <Text style={styles.modalTitle}>Add vacation 🌸</Text>
       <ScrollView
         style={styles.vacScroll}
         keyboardShouldPersistTaps="handled">
@@ -1076,7 +1196,7 @@ function AddLeaveForm({
             }
           }}
           placeholder="e.g. Casual Leave"
-          placeholderTextColor="#777"
+          placeholderTextColor={PH}
           maxLength={30}
           style={styles.input}
         />
@@ -1089,7 +1209,7 @@ function AddLeaveForm({
             setCode(t.toUpperCase());
           }}
           placeholder="e.g. CL"
-          placeholderTextColor="#777"
+          placeholderTextColor={PH}
           autoCapitalize="characters"
           maxLength={4}
           style={styles.input}
@@ -1112,7 +1232,7 @@ function AddLeaveForm({
           value={total}
           onChangeText={t => setTotal(t.replace(/[^0-9]/g, ''))}
           placeholder="e.g. 15"
-          placeholderTextColor="#777"
+          placeholderTextColor={PH}
           keyboardType="number-pad"
           maxLength={3}
           style={styles.input}
@@ -1142,7 +1262,7 @@ function AddLeaveForm({
             })
           }
           style={[styles.modalBtn, !valid && {opacity: 0.35}]}>
-          <Text style={[styles.modalBtnText, {color: '#4DA3FF'}]}>Save</Text>
+          <Text style={[styles.modalBtnText, {color: C.pinkDark}]}>Save</Text>
         </Pressable>
       </View>
     </>
@@ -1196,7 +1316,7 @@ function DatePicker({
             onPress={() => setM(i)}
             style={[styles.monthChip, m === i && styles.monthChipActive]}>
             <Text
-              style={[styles.monthChipText, m === i && {color: '#000'}]}>
+              style={[styles.monthChipText, m === i && {color: '#fff'}]}>
               {name}
             </Text>
           </Pressable>
@@ -1221,7 +1341,7 @@ function DatePicker({
               onPress={() => onPick(key)}
               style={styles.pickDay}>
               <View style={[styles.pickDayInner, active && styles.pickDayActive]}>
-                <Text style={[styles.pickDayText, active && {color: '#000'}]}>
+                <Text style={[styles.pickDayText, active && {color: '#fff'}]}>
                   {d}
                 </Text>
               </View>
@@ -1242,140 +1362,257 @@ function DatePicker({
 // ---------- Styles ----------
 
 const styles = StyleSheet.create({
-  root: {flex: 1, backgroundColor: '#000'},
+  root: {flex: 1, backgroundColor: C.bg},
 
+  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingTop: 20,
-    paddingBottom: 12,
+    paddingTop: 14,
+    paddingBottom: 8,
     minHeight: 72,
-    gap: 10,
+    gap: 8,
   },
-  title: {color: '#fff', fontSize: 22, fontWeight: '700'},
-  arrow: {color: '#fff', fontSize: 30, lineHeight: 32, paddingHorizontal: 4},
+  titleBlock: {
+    alignItems: 'center',
+    flexShrink: 1,
+    paddingHorizontal: 2,
+  },
+  titleYear: {
+    color: C.pink,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 1.5,
+  },
+  title: {
+    color: C.pinkDark,
+    fontSize: 32,
+    lineHeight: 38,
+    fontWeight: '700',
+    fontFamily: CUTE_FONT,
+    textShadowColor: '#FFB3D1',
+    textShadowOffset: {width: 2, height: 2},
+    textShadowRadius: 0,
+  },
+  arrow: {
+    color: C.pinkDark,
+    fontSize: 28,
+    lineHeight: 30,
+    paddingHorizontal: 4,
+  },
+  arrowBtn: {
+    width: 34,
+    height: 34,
+    
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  arrowBtnText: {
+    color: C.pink,
+    fontSize: 24,
+    lineHeight: 26,
+    fontWeight: '700',
+    includeFontPadding: false,
+  },
   iconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 9,
-    borderWidth: 2,
-    borderColor: '#fff',
+    width: 40,
+    height: 40,
+    
     alignItems: 'center',
     justifyContent: 'center',
   },
   iconEmoji: {fontSize: 18},
-  todayBtnText: {color: '#fff', fontSize: 16, fontWeight: '700'},
+  todayBtnText: {color: C.pinkDark, fontSize: 16, fontWeight: '800'},
   summary: {
-    color: '#9a9a9f',
+    alignSelf: 'flex-start',
+    marginLeft: 16,
+    marginBottom: 10,
+    color: C.pinkDark,
     fontSize: 13,
-    paddingHorizontal: 18,
-    paddingBottom: 8,
+    fontWeight: '600',
+
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    overflow: 'hidden',
   },
 
-  weekRow: {flexDirection: 'row', paddingHorizontal: 8, paddingBottom: 6},
+  // Weekday labels (gap matches the grid so columns line up)
+  weekRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 8,
+    paddingBottom: 6,
+    gap: 4,
+  },
   weekday: {
     flex: 1,
     textAlign: 'center',
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    color: C.pinkDark,
+    fontSize: 15,
+    fontWeight: '800',
   },
-  sunday: {color: '#E5483B'},
+  sunday: {color: C.sunday},
 
+  // Calendar grid
   pager: {flex: 1},
-  grid: {flex: 1, paddingHorizontal: 8, gap: 4},
+  grid: {flex: 1, paddingHorizontal: 8, gap: 5},
   gridRow: {flex: 1, flexDirection: 'row', gap: 4},
   cell: {
     flex: 1,
-    backgroundColor: '#151515',
-    borderRadius: 8,
+    backgroundColor: C.card,
+    borderRadius: 11,
     alignItems: 'center',
-    paddingTop: 6,
-    borderWidth: 1.5,
-    borderColor: 'transparent',
+    paddingTop: 5,
+    borderWidth: 1,
+    borderColor: C.cardBorder,
+    borderBottomWidth: 2,
+    borderBottomColor: C.cardEdge,
     overflow: 'hidden',
   },
-  cellOut: {backgroundColor: '#0d0d0d'},
-  cellSelected: {borderColor: '#fff'},
+  cellOut: {
+    backgroundColor: C.cardOut,
+    borderColor: '#FFEDF4',
+    borderBottomColor: '#FFE1EE',
+  },
+  cellSelected: {
+    backgroundColor: '#FFF0F7',
+    borderColor: C.pink,
+    borderBottomColor: C.pinkDark,
+    borderWidth: 2,
+  },
   dayCircle: {
     minWidth: 26,
     height: 26,
-    borderRadius: 13,
+    borderRadius:33,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dayToday: {backgroundColor: '#4DA3FF'},
-  dayText: {color: '#fff', fontSize: 16, fontWeight: '500'},
-  dayTextOut: {color: '#666'},
-  dayTextToday: {color: '#000', fontWeight: '700'},
+  dayToday: {},
+  dayText: {color: C.text, fontSize: 15, fontWeight: '600'},
+  dayTextOut: {color: '#E3BFD0'},
+  dayTextToday: {},
   cellTile: {
     marginTop: 4,
     alignSelf: 'stretch',
-    marginHorizontal: 2,
-    borderRadius: 5,
-    paddingVertical: 3,
+    marginHorizontal: 3,
+    borderRadius: 7,
+    paddingVertical: 4,
     alignItems: 'center',
   },
-  cellTileText: {color: '#fff', fontSize: 11, fontWeight: '700'},
+  cellTileText: {color: '#fff', fontSize: 11, fontWeight: '800'},
 
-  bottomWrap: {paddingHorizontal: 16, paddingVertical: 12},
+  // Bottom bar
+  bottomWrap: {paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12},
   bottomBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1c1c1e',
-    borderRadius: 32,
-    height: 64,
+    backgroundColor: C.card,
+    borderRadius: 34,
+    height: 76,
     paddingLeft: 12,
     paddingRight: 8,
+    borderWidth: 2,
+    borderColor: C.pinkSoft,
+    borderBottomWidth: 6,
+    borderBottomColor: C.cardEdge,
   },
-  tilesContent: {alignItems: 'center', gap: 8, paddingRight: 8},
-  barTile: {
-    minWidth: 56,
+  tilesContent: {alignItems: 'center', gap: 10, paddingRight: 8, paddingBottom: 2},
+
+  // 3D tiles
+  tile3d: {
+    minWidth: 58,
     paddingHorizontal: 14,
-    height: 40,
-    borderRadius: 10,
+    height: 48,
+    borderRadius: 35,
     alignItems: 'center',
     justifyContent: 'center',
+    
   },
-  barTileText: {color: '#fff', fontSize: 16, fontWeight: '700'},
+  tile3dPressed: {
+    transform: [{translateY: 4}],
+    borderBottomWidth: 2,
+    elevation: 0,
+  },
+  tileGloss: {
+    
+  },
+  barTileText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '800',
+    textShadowColor: 'rgba(0,0,0,0.18)',
+    textShadowOffset: {width: 0, height: 1},
+    textShadowRadius: 1,
+  },
   plusBtn: {
-    width: 46,
-    height: 46,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: C.pink,
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 'auto',
+    
+ 
   },
-  plusText: {color: '#fff', fontSize: 36, lineHeight: 40, fontWeight: '300'},
+  plusBtnPressed: {
+    transform: [{translateY: 3}],
+    borderBottomWidth: 2,
+    elevation: 0,
+  },
+  plusText: {
+    color: '#fff',
+    fontSize: 30,
+    lineHeight: 34,
+    fontWeight: '600',
+    includeFontPadding: false,
+  },
 
   // Modals
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(91,42,68,0.45)',
     justifyContent: 'center',
     padding: 24,
   },
-  modalCard: {backgroundColor: '#1c1c1e', borderRadius: 20, padding: 20},
-  modalTitle: {color: '#fff', fontSize: 20, fontWeight: '700', marginBottom: 14},
+  modalCard: {
+    backgroundColor: C.card,
+    borderRadius: 28,
+    padding: 20,
+    borderWidth: 2,
+    borderColor: C.pinkSoft,
+    borderBottomWidth: 6,
+    borderBottomColor: C.cardEdge,
+  },
+  modalTitle: {
+    color: C.pinkDark,
+    fontSize: 22,
+    fontWeight: '700',
+    fontFamily: CUTE_FONT,
+    marginBottom: 14,
+  },
   presetRow: {flexDirection: 'row', gap: 8, marginBottom: 14, flexWrap: 'wrap'},
   presetChip: {
-    borderWidth: 1.5,
+    borderWidth: 2,
     borderRadius: 16,
     paddingHorizontal: 12,
     paddingVertical: 6,
+    backgroundColor: C.card,
   },
-  presetText: {fontSize: 14, fontWeight: '600'},
+  presetText: {fontSize: 14, fontWeight: '700'},
   input: {
-    backgroundColor: '#2a2a2d',
-    color: '#fff',
-    borderRadius: 10,
+    backgroundColor: C.inputBg,
+    color: C.text,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: C.pinkSoft,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
     marginBottom: 14,
   },
-  modalLabel: {color: '#aaa', fontSize: 13, marginBottom: 8},
-  errorText: {color: '#E5483B', fontSize: 13, marginBottom: 10},
+  modalLabel: {color: C.textSoft, fontSize: 13, marginBottom: 8, fontWeight: '600'},
+  errorText: {color: C.danger, fontSize: 13, marginBottom: 10},
   colorRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 16},
   colorDot: {
     width: 36,
@@ -1384,9 +1621,9 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: 'transparent',
   },
-  colorDotActive: {borderColor: '#fff'},
+  colorDotActive: {borderColor: C.text},
   previewRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
-  previewHours: {color: '#ccc', fontSize: 15},
+  previewHours: {color: C.textSoft, fontSize: 15},
   modalActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
@@ -1394,7 +1631,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   modalBtn: {paddingHorizontal: 16, paddingVertical: 10},
-  modalBtnText: {color: '#ccc', fontSize: 16, fontWeight: '600'},
+  modalBtnText: {color: C.textSoft, fontSize: 16, fontWeight: '700'},
 
   // Vacation
   vacHeader: {
@@ -1406,43 +1643,46 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#2a2a2d',
+    backgroundColor: C.pinkSoft,
+    borderBottomWidth: 3,
+    borderBottomColor: C.cardEdge,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 14,
   },
-  vacPlusText: {color: '#fff', fontSize: 24, lineHeight: 27},
+  vacPlusText: {color: C.pinkDark, fontSize: 24, lineHeight: 27, fontWeight: '700'},
   vacScroll: {flexGrow: 0, flexShrink: 1},
-  emptyText: {color: '#888', fontSize: 14, paddingVertical: 12, lineHeight: 20},
+  emptyText: {color: C.textSoft, fontSize: 14, paddingVertical: 12, lineHeight: 20},
   vacRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#333',
+    borderBottomColor: C.pinkSoft,
   },
   vacRowTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  vacTitle: {color: '#fff', fontSize: 17, fontWeight: '600', flexShrink: 1},
-  vacCount: {color: '#fff', fontSize: 17, fontWeight: '600', marginLeft: 8},
-  vacPeriod: {color: '#9a9a9f', fontSize: 13, marginTop: 2},
+  vacTitle: {color: C.text, fontSize: 17, fontWeight: '700', flexShrink: 1},
+  vacCount: {color: C.pinkDark, fontSize: 17, fontWeight: '700', marginLeft: 8},
+  vacPeriod: {color: C.textSoft, fontSize: 13, marginTop: 2},
   codeChip: {
     minWidth: 44,
-    height: 34,
+    height: 36,
     paddingHorizontal: 8,
-    borderRadius: 8,
+    borderRadius: 10,
+    borderBottomWidth: 4,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  codeChipText: {color: '#fff', fontSize: 14, fontWeight: '700'},
-  backText: {color: '#4DA3FF', fontSize: 16, marginBottom: 12},
+  codeChipText: {color: '#fff', fontSize: 14, fontWeight: '800'},
+  backText: {color: C.pinkDark, fontSize: 16, marginBottom: 12, fontWeight: '700'},
   detailTop: {flexDirection: 'row', alignItems: 'center', gap: 12},
   detailSummary: {
-    color: '#ccc',
+    color: C.textSoft,
     fontSize: 14,
     marginTop: 10,
     marginBottom: 6,
@@ -1452,23 +1692,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#333',
+    borderBottomColor: C.pinkSoft,
     gap: 12,
   },
-  dayRowIndex: {color: '#777', width: 24, fontSize: 14},
-  dayRowText: {color: '#fff', fontSize: 16},
+  dayRowIndex: {color: C.textSoft, width: 24, fontSize: 14},
+  dayRowText: {color: C.text, fontSize: 16},
 
   // Add vacation form
   dateRow: {flexDirection: 'row', gap: 10, marginBottom: 14},
   dateBtn: {
     flex: 1,
-    backgroundColor: '#2a2a2d',
-    borderRadius: 10,
+    backgroundColor: C.inputBg,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: C.pinkSoft,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
-  dateBtnLabel: {color: '#888', fontSize: 12},
-  dateBtnText: {color: '#fff', fontSize: 16, marginTop: 2},
+  dateBtnLabel: {color: C.textSoft, fontSize: 12},
+  dateBtnText: {color: C.text, fontSize: 16, marginTop: 2},
 
   // Date picker
   yearRow: {
@@ -1478,24 +1720,25 @@ const styles = StyleSheet.create({
     gap: 24,
     marginBottom: 8,
   },
-  yearText: {color: '#fff', fontSize: 20, fontWeight: '700'},
+  yearText: {color: C.text, fontSize: 20, fontWeight: '800'},
   monthWrap: {flexDirection: 'row', flexWrap: 'wrap', marginBottom: 10},
   monthChip: {
     width: '16.66%',
     alignItems: 'center',
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: 10,
   },
-  monthChipActive: {backgroundColor: '#4DA3FF'},
-  monthChipText: {color: '#ddd', fontSize: 13, fontWeight: '600'},
+  monthChipActive: {backgroundColor: C.pink},
+  monthChipText: {color: C.text, fontSize: 13, fontWeight: '700'},
   dayWrap: {flexDirection: 'row', flexWrap: 'wrap'},
   pickWeekday: {
     width: '14.2857%',
     textAlign: 'center',
-    color: '#888',
+    color: C.textSoft,
     fontSize: 12,
     paddingBottom: 4,
   },
+  developedBy: {color: C.textSoft, fontSize: 12, textAlign: 'center'},
   pickDay: {width: '14.2857%', height: 40, alignItems: 'center'},
   pickDayInner: {
     width: 34,
@@ -1504,6 +1747,56 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  pickDayActive: {backgroundColor: '#4DA3FF'},
-  pickDayText: {color: '#fff', fontSize: 15},
+  pickDayActive: {backgroundColor: C.pink},
+  pickDayText: {color: C.text, fontSize: 15},
+
+
+
+  hourPicker: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 10,
+  },
+  
+  hourLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  
+  numberPicker: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 18,
+  },
+  
+  pickerButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: '#E5EAF3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  
+  pickerArrow: {
+    fontSize: 22,
+    fontWeight: '600',
+    color: '#334155',
+  },
+  
+  hourValue: {
+    fontSize: 25,
+    fontWeight: '700',
+    color: '#1E293B',
+    minWidth: 30,
+    textAlign: 'center',
+  },
+
+
+
 });
