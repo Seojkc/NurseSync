@@ -38,7 +38,6 @@ export const COLORS = [
   '#22B8CF', // teal
   '#C28E5C', // caramel
   '#63E6BE', // seafoam
-  '#9C36B5', // plum
 ];
 
 export const PRESETS: {label: string; color: string; hours: string}[] = [

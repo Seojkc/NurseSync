@@ -9,6 +9,7 @@ import {useCalendarData} from '../hooks/useCalendarData';
 import {useMonthPager} from '../hooks/useMonthPager';
 import {AddShiftModal} from '../modals/AddShiftModal';
 import {QuickEntryModal} from '../modals/quickEntry/QuickEntryModal';
+import {DayModal} from '../modals/day/DayModal';
 import {VacationModal} from '../modals/vacation/VacationModal';
 import {ImportRow, Leave, Tile} from '../types';
 import {confirmDeleteLeave, confirmDeleteShift} from '../utils/confirm';
@@ -25,6 +26,7 @@ export default function CalendarScreen() {
   const [shiftModalOpen, setShiftModalOpen] = useState(false);
   const [vacOpen, setVacOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
+  const [dayOpen, setDayOpen] = useState(false);
 
   const selectedKey = toKey(pager.selected);
 
@@ -51,7 +53,8 @@ export default function CalendarScreen() {
         ) !== null
       : false;
 
-  const applyTile = (tile: Tile) => {
+  // Put a tile on the selected day. Returns false (and tells the user) if a leave can't be used.
+  const assignTile = (tile: Tile): boolean => {
     if (tile.leave) {
       const problem = leaveProblem(
         tile.leave,
@@ -61,11 +64,23 @@ export default function CalendarScreen() {
       );
       if (problem) {
         Alert.alert(`${tile.label} not available`, problem);
-        return;
+        return false;
       }
     }
     data.setDay(selectedKey, tile.id);
-    pager.goTo(addDays(pager.selected, 1)); // auto-advance to the next day
+    return true;
+  };
+
+  const applyTile = (tile: Tile) => {
+    if (assignTile(tile)) {
+      pager.goTo(addDays(pager.selected, 1)); // auto-advance to the next day
+    }
+  };
+
+  // Tapping a date selects it and opens its card
+  const openDay = (d: Date) => {
+    pager.goTo(d);
+    setDayOpen(true);
   };
 
   // ----- deleting -----
@@ -124,6 +139,8 @@ export default function CalendarScreen() {
         pager={pager}
         assignments={data.assignments}
         tileById={data.tileById}
+        notes={data.notes}
+        onOpenDay={openDay}
       />
 
       <TileBar
@@ -137,6 +154,20 @@ export default function CalendarScreen() {
       <View>
         <Text style={styles.developedBy}>Developed By SeoNix</Text>
       </View>
+
+      <DayModal
+        visible={dayOpen}
+        dateKey={selectedKey}
+        tile={data.tileById[data.assignments[selectedKey]]}
+        tiles={data.tiles}
+        notes={data.notes[selectedKey] ?? []}
+        isBlocked={isBlocked}
+        onClose={() => setDayOpen(false)}
+        onPickTile={assignTile}
+        onRemoveTile={() => data.clearDay(selectedKey)}
+        onAddNote={text => data.addNote(selectedKey, text)}
+        onDeleteNote={id => data.deleteNote(selectedKey, id)}
+      />
 
       <AddShiftModal
         visible={shiftModalOpen}

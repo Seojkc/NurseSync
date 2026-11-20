@@ -1,7 +1,7 @@
 import React, {useMemo} from 'react';
 import {Pressable, Text, View} from 'react-native';
-import {Assignments, Tile} from '../types';
-import {shade} from '../utils/color';
+import {Assignments, Notes, Tile} from '../types';
+import {shade, tileTextColor} from '../utils/color';
 import {addDays, toKey} from '../utils/date';
 import {styles} from './MonthGrid.styles';
 
@@ -12,6 +12,7 @@ type Props = {
   todayKey: string;
   assignments: Assignments;
   tileById: Record<string, Tile>;
+  notes: Notes;
   onSelect: (d: Date) => void;
 };
 
@@ -23,6 +24,7 @@ export function MonthGrid({
   todayKey,
   assignments,
   tileById,
+  notes,
   onSelect,
 }: Props) {
   const rows = useMemo(() => {
@@ -42,6 +44,7 @@ export function MonthGrid({
             const isSelected = key === selectedKey;
             const isToday = key === todayKey;
             const tile = tileById[assignments[key]];
+            const hasNote = (notes[key]?.length ?? 0) > 0;
             return (
               <Pressable
                 key={key}
@@ -51,6 +54,7 @@ export function MonthGrid({
                   !inMonth && styles.cellOut,
                   isSelected && styles.cellSelected,
                 ]}>
+                {hasNote && <Text style={styles.noteIcon}>🌸</Text>}
                 <View style={[styles.dayCircle, isToday && styles.dayToday]}>
                   <Text
                     style={[
@@ -72,7 +76,15 @@ export function MonthGrid({
                       },
                       !inMonth && {opacity: 0.45},
                     ]}>
-                    <Text style={styles.cellTileText} numberOfLines={1}>
+                    <Text
+                      style={[
+                        styles.cellTileText,
+                        tileTextColor(tile.color) !== '#FFFFFF' && {
+                          color: tileTextColor(tile.color),
+                          textShadowRadius: 0,
+                        },
+                      ]}
+                      numberOfLines={1}>
                       {tile.label}
                     </Text>
                   </View>

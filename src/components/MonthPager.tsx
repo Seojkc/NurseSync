@@ -1,7 +1,7 @@
 import React from 'react';
 import {FlatList, StyleSheet, View} from 'react-native';
 import {MonthPager as MonthPagerState} from '../hooks/useMonthPager';
-import {Assignments, Tile} from '../types';
+import {Assignments, Notes, Tile} from '../types';
 import {toKey} from '../utils/date';
 import {monthOf, PAGES} from '../utils/paging';
 import {MonthGrid} from './MonthGrid';
@@ -10,11 +10,19 @@ type Props = {
   pager: MonthPagerState;
   assignments: Assignments;
   tileById: Record<string, Tile>;
+  notes: Notes;
+  onOpenDay: (d: Date) => void; // a date was tapped
 };
 
 // The horizontally swipeable list of months.
-export function MonthPager({pager, assignments, tileById}: Props) {
-  const {size, listRef, initialIndex, onLayout, onScrollEnd, goTo} = pager;
+export function MonthPager({
+  pager,
+  assignments,
+  tileById,
+  notes,
+  onOpenDay,
+}: Props) {
+  const {size, listRef, initialIndex, onLayout, onScrollEnd} = pager;
   const selectedKey = toKey(pager.selected);
   const todayKey = toKey(pager.today);
 
@@ -38,7 +46,7 @@ export function MonthPager({pager, assignments, tileById}: Props) {
           initialNumToRender={1}
           maxToRenderPerBatch={2}
           windowSize={3}
-          extraData={{selectedKey, assignments, tileById}}
+          extraData={{selectedKey, assignments, tileById, notes}}
           onMomentumScrollEnd={onScrollEnd}
           style={{height: size.h}}
           renderItem={({item}) => {
@@ -52,7 +60,8 @@ export function MonthPager({pager, assignments, tileById}: Props) {
                   todayKey={todayKey}
                   assignments={assignments}
                   tileById={tileById}
-                  onSelect={goTo}
+                  notes={notes}
+                  onSelect={onOpenDay}
                 />
               </View>
             );

@@ -21,6 +21,9 @@ export type Tile = {
 
 export type Assignments = Record<string, string>; // 'YYYY-MM-DD' -> tile id
 
+export type Note = {id: string; text: string};
+export type Notes = Record<string, Note[]>; // 'YYYY-MM-DD' -> notes on that day
+
 // ----- quick entry -----
 
 export type ImportEntry = {day: number; key: string; code: string}; // code '' = unclear

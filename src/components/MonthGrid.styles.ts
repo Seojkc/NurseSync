@@ -47,5 +47,21 @@ export const styles = StyleSheet.create({
     paddingVertical: 4,
     alignItems: 'center',
   },
-  cellTileText: {color: '#fff', fontSize: 11, fontWeight: '800'},
+  cellTileText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '800',
+    textShadowColor: 'rgba(0,0,0,0.25)',
+    textShadowOffset: {width: 0, height: 1},
+    textShadowRadius: 1,
+  },
+  // Small corner emoji = this day has notes. Sits in the corner, never over the tile.
+  noteIcon: {
+    position: 'absolute',
+    bottom: 2,
+    right: 1,
+    fontSize: 20,
+    zIndex:2,
+    includeFontPadding: false,
+  },
 });

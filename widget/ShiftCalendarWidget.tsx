@@ -23,6 +23,7 @@ export type WData = {
   shifts: any[];
   leaves: any[];
   assignments: Record<string, string>;
+  notes?: Record<string, any[]>;
 };
 type Offsets = Record<string, number>;
 
@@ -106,10 +107,11 @@ async function loadData(): Promise<WData> {
         shifts: data.shifts ?? [],
         leaves: data.leaves ?? [],
         assignments: data.assignments ?? {},
+        notes: data.notes ?? {},
       };
     }
   } catch {}
-  return {shifts: [], leaves: [], assignments: {}};
+  return {shifts: [], leaves: [], assignments: {}, notes: {}};
 }
 
 function makeTiles(data: WData): Record<string, WTile> {
@@ -143,6 +145,7 @@ function renderSync(info: WInfo, data: WData, offsets: Offsets) {
       height={info.height}
       offset={Number(offsets[String(info.widgetId)]) || 0}
       assignments={data.assignments}
+      notes={data.notes ?? {}}
       tileById={makeTiles(data)}
     />
   );
@@ -209,6 +212,7 @@ function DayCell({
   inMonth,
   isToday,
   tile,
+  hasNote,
   cellW,
   rowH,
   dayFont,
@@ -220,6 +224,7 @@ function DayCell({
   inMonth: boolean;
   isToday: boolean;
   tile?: WTile;
+  hasNote: boolean;
   cellW: number;
   rowH: number;
   dayFont: number;
@@ -230,6 +235,8 @@ function DayCell({
   const w = cellW - 2;
   const edge = 3;
   const tileW = Math.max(10, cellW - 8);
+  const noteFont = clamp(Math.round(rowH * 1.3), 8, 12);
+  const noteW = noteFont + 3;
   const tileColor = tile ? (inMonth ? tile.color : shade(tile.color, 0.55)) : '#000000';
 
   return (
@@ -252,27 +259,49 @@ function DayCell({
           }}>
           <FlexWidget
             style={{
-              width: circle,
+              width: w,
               height: circle,
-              borderRadius: circle / 2,
+              flexDirection: 'row',
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: isToday ? C.pink : '#00000000',
             }}>
-            <TextWidget
-              text={String(date.getDate())}
+            {/* spacer + note emoji are the same width so the date stays centered */}
+            <FlexWidget style={{width: noteW, height: circle}} />
+            <FlexWidget
               style={{
-                fontSize: dayFont,
-                fontWeight: isToday ? 'bold' : 'normal',
-                color: isToday
-                  ? '#FFFFFF'
-                  : !inMonth
-                  ? C.textOut
-                  : date.getDay() === 0
-                  ? C.sunday
-                  : C.text,
-              }}
-            />
+                width: circle,
+                height: circle,
+                borderRadius: circle / 2,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: isToday ? C.pink : '#00000000',
+              }}>
+              <TextWidget
+                text={String(date.getDate())}
+                style={{
+                  fontSize: dayFont,
+                  fontWeight: isToday ? 'bold' : 'normal',
+                  color: isToday
+                    ? '#FFFFFF'
+                    : !inMonth
+                    ? C.textOut
+                    : date.getDay() === 0
+                    ? C.sunday
+                    : C.text,
+                }}
+              />
+            </FlexWidget>
+            <FlexWidget
+              style={{
+                width: noteW,
+                height: circle,
+                alignItems: 'center',
+                justifyContent: 'flex-start',
+              }}>
+              {hasNote ? (
+                <TextWidget text="🌸" style={{fontSize: noteFont}} />
+              ) : null}
+            </FlexWidget>
           </FlexWidget>
           {tile ? (
             <FlexWidget
@@ -314,12 +343,14 @@ function ShiftCalendarWidget({
   height,
   offset,
   assignments,
+  notes,
   tileById,
 }: {
   width: number;
   height: number;
   offset: number;
   assignments: Record<string, string>;
+  notes: Record<string, any[]>;
   tileById: Record<string, WTile>;
 }) {
   const now = new Date();
@@ -483,6 +514,7 @@ function ShiftCalendarWidget({
                 inMonth={date.getMonth() === month}
                 isToday={key === todayKey}
                 tile={tileById[assignments[key]]}
+                hasNote={(notes[key]?.length ?? 0) > 0}
                 cellW={cellW}
                 rowH={rowH}
                 dayFont={dayFont}

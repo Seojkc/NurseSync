@@ -1,6 +1,6 @@
 import React from 'react';
 import {Pressable, StyleProp, Text, View, ViewStyle} from 'react-native';
-import {shade} from '../utils/color';
+import {shade, tileTextColor} from '../utils/color';
 import {styles} from './Tile3D.styles';
 
 type Props = {
@@ -13,6 +13,7 @@ type Props = {
 
 // The chunky candy-style button used for shift / leave tiles in the bottom bar.
 export function Tile3D({color, label, onPress, onLongPress, style}: Props) {
+  const light = tileTextColor(color) !== '#FFFFFF';
   return (
     <Pressable
       onPress={onPress}
@@ -25,7 +26,14 @@ export function Tile3D({color, label, onPress, onLongPress, style}: Props) {
         style,
       ]}>
       <View pointerEvents="none" style={styles.tileGloss} />
-      <Text style={styles.barTileText} numberOfLines={1}>
+      <Text
+        style={[
+          styles.barTileText,
+          light
+            ? {color: tileTextColor(color), textShadowRadius: 0}
+            : undefined,
+        ]}
+        numberOfLines={1}>
         {label}
       </Text>
     </Pressable>
